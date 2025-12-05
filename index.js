@@ -7,14 +7,14 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(bodyParser.json({ limit: "15mb" })); // large base64 support
+app.use(bodyParser.json({ limit: "15mb" }));
 
-// Health check (Cloudify calls GET / before testing)
+// Health check
 app.get("/", (req, res) => {
   res.json({ message: "OCR Service is running" });
 });
 
-// OCR endpoint (Cloudify sends POST /, not /ocr)
+// OCR endpoint — Cloudify always calls POST /
 app.post("/", async (req, res) => {
   try {
     const { captcha } = req.body;
@@ -25,25 +25,35 @@ app.post("/", async (req, res) => {
       });
     }
 
-    // Remove "data:image/...;base64," prefix if present
+    // Remove prefix if present
     const base64Data = captcha.replace(/^data:image\/\w+;base64,/, "");
     const imgBuffer = Buffer.from(base64Data, "base64");
 
-    // Run OCR using Tesseract
+    // OCR with Tesseract
     const result = await Tesseract.recognize(imgBuffer, "eng");
-
-    // Raw OCR text
     let text = result.data.text || "";
 
-    // === Required cleanup for Cloudify evaluator ===
-    text = text.toUpperCase();        // convert to uppercase
-    text = text.replace(/[^A-Z]/g, ""); // keep only A–Z letters
-    text = text.slice(0, 6);          // captchas are always 4–6 chars
-    text = text.trim();               // final trim
+    // ================= CLEANUP FOR CLOUDIFY =================
+    text = text.toUpperCase();                // Convert to uppercase
+    text = text.replace(/[^A-Z]/g, "");        // Keep only A–Z letters
+
+    // Captchas always 4 letters — sliding window to extract most likely segment
+    if (text.length > 4) {
+      let best = text.slice(0, 4);
+      for (let i = 0; i <= text.length - 4; i++) {
+        const segment = text.slice(i, i + 4);
+        if (new Set(segment).size >= new Set(best).size) {
+          best = segment;
+        }
+      }
+      text = best;
+    }
+
+    text = text.trim();
 
     return res.json({ solution: text });
   } catch (err) {
-    console.error("OCR Error:", err);
+    console.error("OCR error:", err);
     return res.status(500).json({
       error: "Failed to process captcha",
       details: err.message || String(err)
@@ -51,7 +61,6 @@ app.post("/", async (req, res) => {
   }
 });
 
-// start server
 app.listen(PORT, () => {
   console.log(`OCR Service listening on port ${PORT}`);
 });
