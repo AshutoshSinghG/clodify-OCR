@@ -7,41 +7,43 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(bodyParser.json({ limit: "10mb" })); // base64 images can be big
+app.use(bodyParser.json({ limit: "15mb" })); // large base64 support
 
-// Health check
+// Health check (Cloudify calls GET / before testing)
 app.get("/", (req, res) => {
   res.json({ message: "OCR Service is running" });
 });
 
-app.post("/ocr", async (req, res) => {
+// OCR endpoint (Cloudify sends POST /, not /ocr)
+app.post("/", async (req, res) => {
   try {
     const { captcha } = req.body;
 
     if (!captcha || typeof captcha !== "string") {
       return res.status(400).json({
-        error: "Invalid request. Expected body: { \"captcha\": \"base64_string\" }"
+        error: "Invalid request. Expected: { \"captcha\": \"base64_string\" }"
       });
     }
 
-    // Remove data URL prefix if present
+    // Remove "data:image/...;base64," prefix if present
     const base64Data = captcha.replace(/^data:image\/\w+;base64,/, "");
-
-    // Convert base64 -> Buffer
     const imgBuffer = Buffer.from(base64Data, "base64");
 
-    // Run OCR
+    // Run OCR using Tesseract
     const result = await Tesseract.recognize(imgBuffer, "eng");
 
-    // Raw text
+    // Raw OCR text
     let text = result.data.text || "";
 
-    // Clean up: remove spaces, newlines etc. because captchas are usually continuous
-    text = text.replace(/\s+/g, "").trim();
+    // === Required cleanup for Cloudify evaluator ===
+    text = text.toUpperCase();        // convert to uppercase
+    text = text.replace(/[^A-Z]/g, ""); // keep only A–Z letters
+    text = text.slice(0, 6);          // captchas are always 4–6 chars
+    text = text.trim();               // final trim
 
     return res.json({ solution: text });
   } catch (err) {
-    console.error("OCR error:", err);
+    console.error("OCR Error:", err);
     return res.status(500).json({
       error: "Failed to process captcha",
       details: err.message || String(err)
@@ -49,6 +51,7 @@ app.post("/ocr", async (req, res) => {
   }
 });
 
+// start server
 app.listen(PORT, () => {
   console.log(`OCR Service listening on port ${PORT}`);
 });
